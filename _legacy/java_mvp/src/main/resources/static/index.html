@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DeepResearch Agent</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <main class="shell">
+    <section class="workspace">
+      <header class="topbar">
+        <div>
+          <h1>DeepResearch Agent</h1>
+          <p>多源检索、来源评分、引用校验、自动报告</p>
+        </div>
+        <span class="status" id="status">ready</span>
+      </header>
+
+      <form id="research-form" class="composer">
+        <textarea id="question" rows="4">调研 2026 年 Java Agent 框架的发展趋势，并比较 Spring AI、LangChain4j 和 LangGraph4j。</textarea>
+        <button type="submit">开始研究</button>
+      </form>
+
+      <section class="panes">
+        <div class="panel">
+          <h2>执行轨迹</h2>
+          <ol id="events" class="events"></ol>
+        </div>
+        <div class="panel report-panel">
+          <h2>研究报告</h2>
+          <pre id="report" class="report">报告生成后会显示在这里。</pre>
+        </div>
+      </section>
+    </section>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>

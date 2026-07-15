@@ -1,0 +1,17 @@
+.DS_Store
+.pycache/
+__pycache__/
+*.py[cod]
+
+.deepresearch/
+.deepresearch_py/
+
+.env
+.env.*
+!.env.example
+
+*.log
+
+build/
+_legacy/**/build/
+_legacy/**/test-runs/
