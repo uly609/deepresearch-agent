@@ -200,7 +200,7 @@ class LocalVectorStore:
 def build_vector_store() -> LocalVectorStore:
     """根据环境变量创建向量库。
 
-    优先顺序：远程 embedding API -> 本地 sentence-transformers -> 哈希向量。
+    优先顺序：远程 embedding API -> 显式启用的本地 sentence-transformers -> 哈希向量。
     """
     api_key = os.environ.get("EMBEDDING_API_KEY") or os.environ.get("OPENAI_API_KEY", "")
     model = os.environ.get("EMBEDDING_MODEL", "")
@@ -212,7 +212,7 @@ def build_vector_store() -> LocalVectorStore:
             dimensions=int(os.environ.get("EMBEDDING_DIMENSIONS", "1024")),
         )
         return LocalVectorStore(embedding_provider=provider)
-    if os.environ.get("DISABLE_LOCAL_EMBEDDINGS", "") != "1":
+    if os.environ.get("ENABLE_LOCAL_EMBEDDINGS", "") == "1" and os.environ.get("DISABLE_LOCAL_EMBEDDINGS", "") != "1":
         local_provider = SentenceTransformerEmbeddingProvider()
         if local_provider.available():
             return LocalVectorStore(embedding_provider=local_provider)

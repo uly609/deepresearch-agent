@@ -149,20 +149,21 @@ docs/                  # 学习文档和面试话术
 
 - Python Agent Core，结构参考 Pico 的 runtime / loop / store / state 分层
 - 自动拆解研究问题
+- LangGraph 将 `query_rewrite` 作为独立节点；SearchQueryPlanner 对每个子问题或反思缺口做 query fan-out，覆盖官方文档、GitHub/论文和趋势检索
 - SourceConnector 工具抽象，统一封装 GitHub / arXiv / Web / MCP 和离线 fallback 来源
 - 普通运行默认启用外部检索 Connector，失败时自动回退到离线来源
-- ToolRegistry 统一调度多个 Connector，并按 URL 合并来源
+- ToolRegistry 统一调度多个 Connector，记录 retrieved_query/retrieved_by/connectors，并按规范化 URL 合并来源
 - ContextManager 管理工作记忆和证据池
-- PromptInjectionGuard 基础安全检查
-- SourceEvaluator 按权威性、新鲜度、相关性和风险进行来源评分
-- CitationVerifier 结合来源分数和关键词证据重合度，标记 supported / weak / unsupported，并保存 evidence excerpt 与 verification reason
+- PromptInjectionGuard 扫描 title/snippet/metadata，按 high/medium 风险过滤或打标
+- SourceEvaluator 按权威性、新鲜度、相关性和风险进行来源评分；相关性采用 LLM/关键词 + RAG 向量相似度的混合判断
+- CitationVerifier 结合来源分数、EvidenceChunk 和可选 LLM judge，标记 supported / weak / unsupported，并保存 evidence excerpt 与 verification reason
 - `--llm` 开启后，CitationVerifier 会调用 LLM 对 claim 与 evidence 做严格 supported / weak / unsupported 判断
 - ConflictDetector 检查同一主题下 supported / weak / unsupported 信号是否冲突，并在报告中输出 Conflict Checks
-- 轻量 RAG Retriever：把来源切成 evidence chunks，写入本地 `vector_store.json`，用哈希向量和 cosine similarity 检索支撑 claim
-- ReportAuditor 对最终报告逐句做 citation audit，统计 grounded / weak / uncited 句子
-- ReflectionAgent 查找信息缺口，LangGraph 版本可通过条件边回到 search 做补充检索
+- 轻量 Hybrid RAG Retriever：把来源切成 evidence chunks，写入本地 `vector_store.json`，用 embedding/cosine similarity + 关键词重合检索支撑 claim
+- ReportAuditor 对最终报告逐句做 citation audit；`--llm` 开启后可用 LLM 做 grounded / weak / uncited 审计
+- ReflectionAgent 查找信息缺口，LangGraph 可通过条件边回到 `query_rewrite`，补搜前先重新规划 query
 - ReportAgent 生成带 Evidence、Citation Checks、Remaining Gaps 的 Markdown 报告
-- 可选 LLM Planner / Reporter：有 API key 时增强计划和摘要，无 key 时保持规则版可复现
+- 可选 LLM Planner / Evaluator / Verifier / Reflection / Reporter / Auditor：有 API key 时增强语义判断，无 key 时保持规则版可复现
 - EvalHarness 评估任务完成、来源数、引用数、弱引用、引用支持率和来源多样性
 - 每次 run 生成 `task_state.json`、`trace.jsonl`、`research_state.json`、`report.md`、`checkpoint.json`
 
@@ -170,7 +171,7 @@ docs/                  # 学习文档和面试话术
 
 1. 增加更稳定的商业 Web Search Provider 或自建搜索代理。
 2. 继续增强 LLM citation grounding，让逐句报告级引用校验由模型辅助判断。
-3. 将本地哈希向量库替换为 FAISS、Chroma、Milvus 或 pgvector。
+3. 将本地轻量向量库替换为 FAISS、Chroma、Milvus 或 pgvector。
 4. 做上下文压缩、证据 pinning、完整 GraphState checkpoint resume。
 5. 接真实 MCP Client / MCP Gateway；当前已预留 `MCP_SEARCH_ENDPOINT` 搜索入口。
 6. 加 Tool Policy 和更严格的 Prompt Injection 防护。

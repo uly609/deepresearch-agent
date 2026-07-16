@@ -4,9 +4,11 @@
 RunStore 和 LangGraph 工作流装配成一个可以执行 `ask()` 的运行时对象。
 """
 
-from .agents import ConflictDetectorAgent, CitationVerifierAgent, PlannerAgent, ReflectionAgent, ReportAgent, ReportAuditorAgent, SourceEvaluatorAgent
+import urllib.parse
+
+from .agents import ConflictDetectorAgent, CitationVerifierAgent, PlannerAgent, ReflectionAgent, ReportAgent, ReportAuditorAgent, SearchQueryPlannerAgent, SourceEvaluatorAgent
+from .models import ResearchEvent, Source, now_iso
 from .llm_provider import build_llm_provider
-from .models import ResearchEvent, now_iso
 from .rag import EvidenceRetriever
 from .run_store import RunStore
 from .security import PromptInjectionGuard
@@ -38,15 +40,16 @@ class DeepResearchRuntime:
         self.use_llm = use_llm
         self.llm = build_llm_provider(use_llm)
         self.planner = PlannerAgent(self.llm)
+        self.query_planner = SearchQueryPlannerAgent(self.llm)
         self.tools = tools or ToolRegistry(default_research_connectors(use_live=use_live_tools))
         self.guard = PromptInjectionGuard()
         self.rag = EvidenceRetriever(build_vector_store())
-        self.evaluator = SourceEvaluatorAgent()
+        self.evaluator = SourceEvaluatorAgent(self.llm)
         self.verifier = CitationVerifierAgent(self.llm)
         self.conflict_detector = ConflictDetectorAgent()
-        self.reflector = ReflectionAgent()
+        self.reflector = ReflectionAgent(self.llm)
         self.reporter = ReportAgent(self.llm)
-        self.report_auditor = ReportAuditorAgent()
+        self.report_auditor = ReportAuditorAgent(self.llm)
         self.loop = self._build_loop(engine)
         self.current_task_state = None
         self.current_research_state = None
@@ -111,8 +114,66 @@ class DeepResearchRuntime:
         )
 
     def dedupe_sources(self, sources):
-        """按 URL 对来源去重。"""
+        """按规范化 URL 去重，并合并重复来源的摘要和 metadata。"""
         by_url = {}
         for source in sources:
-            by_url.setdefault(source.url, source)
+            key = _canonical_url(source.url)
+            if key in by_url:
+                by_url[key] = _merge_source(by_url[key], source)
+            else:
+                source.metadata.setdefault("canonical_url", key)
+                by_url[key] = source
         return list(by_url.values())
+
+
+def _canonical_url(url: str) -> str:
+    """规范化 URL，过滤跟踪参数和 fragment。"""
+    parsed = urllib.parse.urlparse(url)
+    if not parsed.scheme:
+        return url.rstrip("/")
+    query = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+    filtered_query = [
+        (key, value)
+        for key, value in query
+        if not key.lower().startswith("utm_") and key.lower() not in {"ref", "source", "fbclid", "gclid"}
+    ]
+    normalized = parsed._replace(
+        scheme=parsed.scheme.lower(),
+        netloc=parsed.netloc.lower(),
+        path=parsed.path.rstrip("/") or parsed.path,
+        query=urllib.parse.urlencode(filtered_query),
+        fragment="",
+    )
+    return urllib.parse.urlunparse(normalized)
+
+
+def _merge_source(left: Source, right: Source) -> Source:
+    """合并同一 URL 的多次搜索结果。"""
+    metadata = dict(left.metadata)
+    for key, value in right.metadata.items():
+        if not value:
+            continue
+        if key in {"retrieved_query", "retrieved_by", "connectors"} and metadata.get(key):
+            metadata[key] = _append_unique_csv(metadata[key], value)
+        else:
+            metadata.setdefault(key, value)
+    return Source(
+        title=left.title or right.title,
+        url=left.url,
+        kind=left.kind if left.kind != "web" else right.kind,
+        snippet=left.snippet if len(left.snippet) >= len(right.snippet) else right.snippet,
+        published_at=max(left.published_at or "", right.published_at or ""),
+        provider=_append_unique_csv(left.provider, right.provider),
+        metadata=metadata,
+    )
+
+
+def _append_unique_csv(left: str, right: str) -> str:
+    """合并逗号分隔字段并去重。"""
+    values = []
+    for raw in [left, right]:
+        for item in str(raw or "").split(","):
+            item = item.strip()
+            if item and item not in values:
+                values.append(item)
+    return ",".join(values)

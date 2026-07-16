@@ -22,9 +22,9 @@ Delete files.
 
 ## 当前 PromptInjectionGuard 做什么
 
-现在的 `PromptInjectionGuard` 是基础版本。
+现在的 `PromptInjectionGuard` 会把外部搜索结果当成不可信文本处理。
 
-它会检查来源文本里是否包含可疑短语，比如：
+它会检查 `title`、`snippet` 和 `metadata` 里是否包含可疑短语或模式，比如：
 
 ```text
 ignore previous
@@ -32,13 +32,23 @@ system prompt
 send your api key
 delete files
 exfiltrate
+rm -rf
+curl ... | sh
+api_key=...
 ```
 
-如果发现风险，就不让这个 source 进入后续证据池。
+风险分两类：
+
+```text
+high    直接丢弃，不进入后续证据池
+medium  保留但写入 security_findings/security_risk，后续评分降权
+```
+
+同时，`security_findings` 只作为风险标记，不会进入 RAG evidence text，避免安全标签污染证据内容。
 
 ## 未来要怎么增强
 
-后续可以加：
+后续可以继续加：
 
 - 来源域名白名单/黑名单
 - 工具调用权限策略
@@ -51,5 +61,4 @@ exfiltrate
 
 可以这样讲：
 
-> DeepResearch 会处理大量外部内容，所以我把外部 source 都视为不可信数据。当前通过 `PromptInjectionGuard` 做基础注入检测，后续会加入 ToolPolicy、域名策略和结构化输出校验，避免网页内容改变系统指令或诱导 Agent 调用高风险工具。
-
+> DeepResearch 会处理大量外部内容，所以我把外部 source 都视为不可信数据。当前通过 `PromptInjectionGuard` 扫描 title、snippet 和 metadata，对高风险 prompt injection 直接过滤，对中风险来源打标并在评分阶段降权。安全标记不会进入 evidence text，避免污染 RAG 和引用校验。后续还可以加入 ToolPolicy、域名策略和高风险工具人工确认。

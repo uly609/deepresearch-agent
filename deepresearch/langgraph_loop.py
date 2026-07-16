@@ -3,7 +3,7 @@
 This file is the main DeepResearch workflow.
 It maps DeepResearch stages to LangGraph nodes:
 
-plan -> search -> dedupe -> score -> verify -> reflect -> report
+plan -> query_rewrite -> search -> dedupe -> rag -> score -> verify -> reflect -> report
 """
 
 from typing import Any, List, TypedDict
@@ -23,6 +23,7 @@ class GraphState(TypedDict):
     context: ContextManager
     collected: List[Any]
     gaps: List[str]
+    pending_queries: List[Any]
     search_round: int
     searched_queries: List[str]
     emit: Any
@@ -31,8 +32,8 @@ class GraphState(TypedDict):
 class LangGraphAgentLoop:
     """DeepResearch 的 LangGraph 工作流实现。
 
-    它把研究任务拆成 plan/search/dedupe/score/verify/reflect/report 等节点，
-    并通过条件边支持反思后回到 search 补搜。
+    它把研究任务拆成 plan/query_rewrite/search/dedupe/rag/score/verify/
+    reflect/report 等节点，并通过条件边支持反思后重新规划 query 再补搜。
     """
 
     def __init__(self, runtime) -> None:
@@ -57,6 +58,7 @@ class LangGraphAgentLoop:
                 "context": context,
                 "collected": [],
                 "gaps": [],
+                "pending_queries": [],
                 "search_round": 0,
                 "searched_queries": [],
                 "emit": emit,
@@ -76,8 +78,10 @@ class LangGraphAgentLoop:
         graph = StateGraph(GraphState)
         graph.add_node("start", self._start)
         graph.add_node("plan", self._plan)
+        graph.add_node("query_rewrite", self._query_rewrite)
         graph.add_node("search", self._search)
         graph.add_node("dedupe", self._dedupe)
+        graph.add_node("rag", self._rag)
         graph.add_node("score", self._score)
         graph.add_node("verify", self._verify)
         graph.add_node("reflect", self._reflect)
@@ -85,16 +89,18 @@ class LangGraphAgentLoop:
 
         graph.add_edge(START, "start")
         graph.add_edge("start", "plan")
-        graph.add_edge("plan", "search")
+        graph.add_edge("plan", "query_rewrite")
+        graph.add_edge("query_rewrite", "search")
         graph.add_edge("search", "dedupe")
-        graph.add_edge("dedupe", "score")
+        graph.add_edge("dedupe", "rag")
+        graph.add_edge("rag", "score")
         graph.add_edge("score", "verify")
         graph.add_edge("verify", "reflect")
         graph.add_conditional_edges(
             "reflect",
             self._route_after_reflect,
             {
-                "search": "search",
+                "query_rewrite": "query_rewrite",
                 "report": "report",
             },
         )
@@ -128,8 +134,40 @@ class LangGraphAgentLoop:
         runtime.persist(task_state, research_state, context, "planned")
         return state
 
+    def _query_rewrite(self, state: GraphState) -> GraphState:
+        """Query 规划节点：将子问题或反思缺口扩展成可检索的 query。"""
+        runtime = self.runtime
+        task_state = state["task_state"]
+        research_state = state["research_state"]
+        emit = state["emit"]
+        plan = research_state.plan
+        if plan is None:
+            raise RuntimeError("cannot rewrite queries before plan is created")
+
+        targets = state["gaps"] if state["gaps"] else plan.sub_questions
+        state["gaps"] = []
+        pending_queries = []
+        known_queries = set(state["searched_queries"])
+        for target in targets:
+            for query in runtime.query_planner.expand(state["question"], target):
+                if query not in known_queries:
+                    pending_queries.append({"target": target, "query": query})
+                    known_queries.add(query)
+
+        state["pending_queries"] = pending_queries
+        task_state.phase = "queries_planned"
+        runtime.emit(
+            task_state,
+            research_state,
+            emit,
+            "queries_rewritten",
+            "已为 {} 个研究目标生成 {} 条候选 query".format(len(targets), len(pending_queries)),
+        )
+        runtime.persist(task_state, research_state, state["context"], "queries_planned")
+        return state
+
     def _search(self, state: GraphState) -> GraphState:
-        """搜索节点：调用 ToolRegistry 搜索来源，并做安全过滤。"""
+        """搜索节点：执行已规划 query，并对外部来源进行安全过滤。"""
         runtime = self.runtime
         task_state = state["task_state"]
         research_state = state["research_state"]
@@ -137,20 +175,16 @@ class LangGraphAgentLoop:
         emit = state["emit"]
         collected = state["collected"]
         searched_queries = state["searched_queries"]
-        plan = research_state.plan
-        if plan is None:
-            raise RuntimeError("cannot search before plan is created")
-
-        queries = state["gaps"] if state["gaps"] else plan.sub_questions
-        state["gaps"] = []
-        state["search_round"] = state["search_round"] + 1
-        for sub_question in queries:
-            if sub_question in searched_queries:
-                continue
-            searched_queries.append(sub_question)
+        pending_queries = state["pending_queries"]
+        if pending_queries:
+            state["search_round"] = state["search_round"] + 1
+        for item in pending_queries:
+            target = item["target"]
+            search_query = item["query"]
+            searched_queries.append(search_query)
             task_state.record_tool("search_all")
-            runtime.emit(task_state, research_state, emit, "search_started", sub_question)
-            results = runtime.tools.search_all(sub_question)
+            runtime.emit(task_state, research_state, emit, "search_started", "{} -> {}".format(target, search_query))
+            results = runtime.tools.search_all(search_query)
             results = runtime.guard.filter_sources(results)
             collected.extend(results)
             context.add_sources(results)
@@ -158,21 +192,40 @@ class LangGraphAgentLoop:
             runtime.persist(task_state, research_state, context, "search_step")
         state["collected"] = collected
         state["searched_queries"] = searched_queries
+        state["pending_queries"] = []
         return state
 
     def _dedupe(self, state: GraphState) -> GraphState:
-        """去重/RAG 节点：按 URL 去重来源，并建立 evidence chunks 向量索引。"""
+        """去重节点：规范化 URL 后合并重复来源与来源追踪信息。"""
         runtime = self.runtime
         task_state = state["task_state"]
         research_state = state["research_state"]
         context = state["context"]
         emit = state["emit"]
         research_state.sources = runtime.dedupe_sources(state["collected"])
-        research_state.evidence_chunks = runtime.rag.index_sources(research_state.sources)
-        runtime.run_store.write_vector_store(task_state, runtime.rag.vector_store)
         runtime.emit(task_state, research_state, emit, "sources_deduped", "保留了 {} 个去重后的来源".format(len(research_state.sources)))
         task_state.phase = "searched"
         runtime.persist(task_state, research_state, context, "searched")
+        return state
+
+    def _rag(self, state: GraphState) -> GraphState:
+        """RAG 节点：把去重来源切成 EvidenceChunk 并建立向量索引。"""
+        runtime = self.runtime
+        task_state = state["task_state"]
+        research_state = state["research_state"]
+        context = state["context"]
+        emit = state["emit"]
+        research_state.evidence_chunks = runtime.rag.index_sources(research_state.sources)
+        runtime.run_store.write_vector_store(task_state, runtime.rag.vector_store)
+        runtime.emit(
+            task_state,
+            research_state,
+            emit,
+            "evidence_indexed",
+            "已建立 {} 个 EvidenceChunk 的混合检索索引".format(len(research_state.evidence_chunks)),
+        )
+        task_state.phase = "indexed"
+        runtime.persist(task_state, research_state, context, "indexed")
         return state
 
     def _score(self, state: GraphState) -> GraphState:
@@ -183,7 +236,7 @@ class LangGraphAgentLoop:
         research_state = state["research_state"]
         context = state["context"]
         emit = state["emit"]
-        research_state.scores = runtime.evaluator.score(research_state.sources, question)
+        research_state.scores = runtime.evaluator.score(research_state.sources, question, runtime.rag)
         runtime.emit(task_state, research_state, emit, "sources_scored", "已对来源的权威性、新鲜度、相关性和风险完成评分")
         task_state.phase = "scored"
         runtime.persist(task_state, research_state, context, "scored")
@@ -234,9 +287,9 @@ class LangGraphAgentLoop:
         return state
 
     def _route_after_reflect(self, state: GraphState) -> str:
-        """条件路由：有缺口且未超过轮次时回到 search，否则进入 report。"""
+        """条件路由：有缺口且未超过轮次时重新规划 query，否则进入报告。"""
         if state["gaps"] and state["search_round"] < 2:
-            return "search"
+            return "query_rewrite"
         return "report"
 
     def _report(self, state: GraphState) -> GraphState:

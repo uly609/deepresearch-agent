@@ -31,7 +31,7 @@
 工作流里这一句负责调用评分器：
 
 ```python
-research_state.scores = runtime.evaluator.score(research_state.sources, question)
+research_state.scores = runtime.evaluator.score(research_state.sources, question, runtime.rag)
 ```
 
 真正打分逻辑在 `SourceEvaluatorAgent`：
@@ -45,13 +45,13 @@ final = authority * 0.35 + freshness * 0.2 + relevance * 0.35 + (1 - risk) * 0.1
 ```text
 authority  来源权威性：官方文档、论文、GitHub、普通网页分数不同
 freshness  新鲜度：发布时间越新越高
-relevance  相关度：问题关键词是否出现在 title/snippet/metadata 里
+relevance  相关度：LLM/关键词判断 + RAG 向量相似度的混合结果
 risk       风险：如果来源被安全模块标记，分数降低
 ```
 
 面试说法：
 
-> 我没有直接相信搜索结果，而是先把来源结构化成 Source，再用 Evaluator 从权威性、新鲜度、相关度和风险四个维度打分。后续 CitationVerifier 会结合这个分数判断 claim 是 supported、weak 还是 unsupported。
+> 我没有直接相信搜索结果，而是先把来源结构化成 Source，再用 Evaluator 从权威性、新鲜度、相关度和风险四个维度打分。相关度不是单纯关键词命中，而是结合 RAG 检索出来的向量相似度；如果开启 LLM，还会让模型做来源质量判断。后续 CitationVerifier 会结合这个分数判断 claim 是 supported、weak 还是 unsupported。
 
 ## 2. MCP 是怎么创建和接入的
 
@@ -104,20 +104,21 @@ research_state.evidence_chunks = runtime.rag.index_sources(research_state.source
 runtime.run_store.write_vector_store(task_state, runtime.rag.vector_store)
 ```
 
-RAG 做三件事：
+RAG 做四件事：
 
 ```text
 1. 把 Source 里的 title、snippet、metadata 拼成 text
-2. 把 text 变成 EvidenceChunk
-3. 写入本地向量库，用于后面 verifier 找证据
+2. 按窗口把 text 切成 EvidenceChunk
+3. 写入本地向量库
+4. 用向量相似度 + 关键词重合做 hybrid retrieve
 ```
 
-当前是轻量版本：
+当前是轻量混合检索版本：
 
 ```text
-不是 Transformer embedding
-不是真正向量数据库
-是本地哈希向量 + cosine similarity
+默认：本地哈希向量 + cosine similarity + 关键词重合
+可选：OpenAI-compatible embedding API
+可选：显式启用本地 sentence-transformers embedding
 ```
 
 但边界是对的，后续可以替换成：
@@ -129,7 +130,7 @@ FAISS / Chroma / Milvus / pgvector
 
 面试说法：
 
-> RAG 不是在一开始回答问题，而是在来源去重后把 Source 切成 evidence chunk，并写入本地 vector store。CitationVerifier 生成 claim 时，会从 retriever 里取与问题最相关的证据片段，避免模型直接凭空生成结论。
+> RAG 不是在一开始回答问题，而是在来源去重后把 Source 切成 evidence chunk，并写入本地 vector store。检索时会融合向量相似度和关键词重合，Score 阶段也会用这个 source-level similarity 参与相关性评分。CitationVerifier 生成 claim 时，会从 retriever 里取与问题最相关的证据片段，避免模型直接凭空生成结论。
 
 ## 4. Context 是怎么控制的
 

@@ -117,6 +117,7 @@ def build_llm_provider(enabled: bool = False) -> LLMProvider:
 
 def parse_json_list(text: str) -> List[str]:
     """把 LLM 返回的 JSON 列表解析成 Python 字符串列表。"""
+    text = _extract_json(text)
     try:
         payload = json.loads(text)
     except json.JSONDecodeError:
@@ -127,3 +128,20 @@ def parse_json_list(text: str) -> List[str]:
         items = payload.get("sub_questions") or payload.get("items") or []
         return [str(item).strip() for item in items if str(item).strip()]
     return []
+
+
+def _extract_json(text: str) -> str:
+    """从 Markdown 或解释性文本中提取 JSON 片段。"""
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.strip("`")
+        if cleaned.lower().startswith("json"):
+            cleaned = cleaned[4:].strip()
+    starts = [index for index in [cleaned.find("["), cleaned.find("{")] if index >= 0]
+    if not starts:
+        return cleaned
+    start = min(starts)
+    end = max(cleaned.rfind("]"), cleaned.rfind("}"))
+    if end > start:
+        return cleaned[start : end + 1]
+    return cleaned

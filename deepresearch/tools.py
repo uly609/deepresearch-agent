@@ -778,11 +778,22 @@ class ToolRegistry:
         self.connectors = connectors
 
     def search_all(self, query: str) -> List[Source]:
-        """调用所有 Connector，并按 URL 合并去重结果。"""
+        """调用所有 Connector，并按规范化 URL 合并去重结果。"""
         results: Dict[str, Source] = {}
         for connector in self.connectors:
             for source in connector.search(query):
-                results.setdefault(source.url, source)
+                if not source.url:
+                    continue
+                source = _clone_source(source)
+                source.metadata.setdefault("retrieved_query", query)
+                source.metadata.setdefault("retrieved_by", connector.name)
+                source.metadata.setdefault("connectors", connector.name)
+                key = _canonical_url(source.url)
+                if key in results:
+                    results[key] = _merge_sources(results[key], source)
+                else:
+                    source.metadata.setdefault("canonical_url", key)
+                    results[key] = source
         return list(results.values())
 
 
@@ -793,6 +804,74 @@ def _query_terms(query: str) -> List[str]:
         cleaned = cleaned.replace(char, " ")
     stop_words = {"the", "and", "for", "with", "about", "need", "more", "evidence"}
     return [token for token in cleaned.split() if len(token) > 2 and token not in stop_words]
+
+
+def _clone_source(source: Source) -> Source:
+    """复制 Source，避免修改静态内置来源对象。"""
+    return Source(
+        title=source.title,
+        url=source.url,
+        kind=source.kind,
+        snippet=source.snippet,
+        published_at=source.published_at,
+        provider=source.provider,
+        metadata=dict(source.metadata),
+    )
+
+
+def _canonical_url(url: str) -> str:
+    """规范化 URL，用于跨 Connector 去重。"""
+    parsed = urllib.parse.urlparse(url)
+    if not parsed.scheme:
+        return url.rstrip("/")
+    query = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+    filtered_query = [
+        (key, value)
+        for key, value in query
+        if not key.lower().startswith("utm_") and key.lower() not in {"ref", "source", "fbclid", "gclid"}
+    ]
+    normalized = parsed._replace(
+        scheme=parsed.scheme.lower(),
+        netloc=parsed.netloc.lower(),
+        path=parsed.path.rstrip("/") or parsed.path,
+        query=urllib.parse.urlencode(filtered_query),
+        fragment="",
+    )
+    return urllib.parse.urlunparse(normalized)
+
+
+def _merge_sources(left: Source, right: Source) -> Source:
+    """合并重复来源，保留更丰富的摘要和检索 provenance。"""
+    metadata = dict(left.metadata)
+    for key, value in right.metadata.items():
+        if not value:
+            continue
+        if key in {"retrieved_query", "retrieved_by", "connectors"} and metadata.get(key):
+            metadata[key] = _append_unique_csv(metadata[key], value)
+        else:
+            metadata.setdefault(key, value)
+    snippet = left.snippet if len(left.snippet) >= len(right.snippet) else right.snippet
+    provider = _append_unique_csv(left.provider, right.provider)
+    return Source(
+        title=left.title or right.title,
+        url=left.url,
+        kind=left.kind if left.kind != "web" else right.kind,
+        snippet=snippet,
+        published_at=max(left.published_at or "", right.published_at or ""),
+        provider=provider,
+        metadata=metadata,
+    )
+
+
+def _append_unique_csv(left: str, right: str) -> str:
+    """把逗号分隔字段合并去重。"""
+    values = []
+    for raw in [left, right]:
+        for item in str(raw or "").split(","):
+            item = item.strip()
+            if item and item not in values:
+                values.append(item)
+    return ",".join(values)
 
 
 def _live_query(query: str) -> str:
