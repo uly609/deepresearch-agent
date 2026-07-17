@@ -1,6 +1,35 @@
 # DeepResearch Agent
 
-这是一个 **Python-first Agent 项目**，目标不是普通后端，而是实现 DeepResearch 方向的 Agent 能力：任务规划、工具调用、上下文管理、来源评估、引用验证、反思和 Eval Harness。
+面向技术调研场景的 Python-first DeepResearch Agent。它不直接根据模型记忆输出答案，而是把研究问题拆成子任务，检索外部资料，构建证据链并验证引用，最终生成可追溯的 Markdown 研究报告。
+
+```text
+用户问题
+  -> Plan：拆解研究子问题
+  -> Query Rewrite：为每个子问题生成多条检索 query
+  -> Search：统一调用 GitHub / arXiv / Web / MCP Connector
+  -> Dedupe：规范化 URL，合并重复来源并保留 provenance
+  -> RAG：Source -> EvidenceChunk -> Hybrid Retrieval
+  -> Score：权威性 / 新鲜度 / 相关性 / 风险评分
+  -> Verify：claim 与 evidence 校验，标记 supported / weak / unsupported
+  -> Reflect：有证据缺口则回到 Query Rewrite 补搜
+  -> Report：输出带引用、冲突检查和报告审计结果
+```
+
+## 为什么不是普通 RAG 问答
+
+- **动态工作流**：LangGraph 条件边控制补搜，而不是固定的一次检索后直接回答。
+- **多源工具调用**：Search 通过 `ToolRegistry` 统一调度 GitHub、arXiv、Web、MCP 与离线 fallback，主流程不依赖某个搜索供应商。
+- **证据可追溯**：每条来源记录检索 query、Connector 和规范化 URL；每次 run 都落盘 report、trace、task state、checkpoint 和 vector store。
+- **引用可信性控制**：来源评分、Prompt Injection 过滤、Hybrid RAG、CitationVerifier 和报告逐句审计共同约束模型生成。
+
+## 快速体验
+
+```bash
+python3 -m pip install -r requirements.txt
+python3 -m deepresearch --offline-tools "比较 LangGraph、CrewAI、AutoGen 的 Agent 工作流能力"
+```
+
+开启 `--live-tools` 可检索真实来源；配置 LLM API Key 后使用 `--llm` 启用模型辅助规划、评分、验证和报告生成。未配置 Key 时会回退到规则版，保证流程可复现。
 
 早期 Java Demo 已移动到 `_legacy/java_mvp/`，只作为历史参考，不再是主线。
 
