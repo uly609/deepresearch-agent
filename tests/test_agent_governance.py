@@ -5,7 +5,9 @@ import unittest
 
 from deepresearch.context_manager import ContextManager
 from deepresearch.agents import ReportAgent
+from deepresearch.graph_rag import EvidenceGraphBuilder
 from deepresearch.models import Claim, Source, SourceScore
+from deepresearch.rag import EvidenceRetriever
 from deepresearch.run_store import RunStore
 from deepresearch.task_state import TaskState
 from deepresearch.tools import SourceConnector, ToolRegistry
@@ -69,6 +71,44 @@ class AgentGovernanceTests(unittest.TestCase):
         )
         self.assertIn("compare agent frameworks", report)
         self.assertNotIn("Python 应该作为主实现语言", report)
+
+    def test_hybrid_retriever_uses_bm25_and_rrf_for_lexical_match(self):
+        retriever = EvidenceRetriever()
+        retriever.index_sources([
+            Source(
+                title="LangGraph checkpoint",
+                url="https://example.com/langgraph",
+                kind="official",
+                snippet="LangGraph supports checkpoint persistence and stateful workflow recovery.",
+                published_at="2026-01-01",
+                provider="test",
+            ),
+            Source(
+                title="Unrelated",
+                url="https://example.com/other",
+                kind="web",
+                snippet="A cooking note with no agent workflow details.",
+                published_at="2026-01-01",
+                provider="test",
+            ),
+        ])
+        results = retriever.retrieve("checkpoint workflow recovery", limit=1)
+        self.assertEqual(results[0].source_url, "https://example.com/langgraph")
+
+    def test_evidence_graph_builder_extracts_relations(self):
+        retriever = EvidenceRetriever()
+        chunks = retriever.index_sources([
+            Source(
+                title="LangGraph and RAG",
+                url="https://example.com/graph",
+                kind="official",
+                snippet="LangGraph integrates RAG, MCP and checkpoint for DeepResearch workflow.",
+                published_at="2026-01-01",
+                provider="test",
+            )
+        ])
+        relations = EvidenceGraphBuilder().build(chunks)
+        self.assertTrue(any(relation.relation == "MENTIONS" for relation in relations))
 
 
 if __name__ == "__main__":

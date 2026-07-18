@@ -3,7 +3,7 @@
 This file is the main DeepResearch workflow.
 It maps DeepResearch stages to LangGraph nodes:
 
-plan -> query_rewrite -> search -> dedupe -> rag -> score -> verify -> reflect -> report
+plan -> query_rewrite -> search -> dedupe -> rag -> graph_rag -> score -> verify -> reflect -> report
 """
 
 from typing import Any, List, TypedDict
@@ -33,7 +33,7 @@ class LangGraphAgentLoop:
     """DeepResearch 的 LangGraph 工作流实现。
 
     它把研究任务拆成 plan/query_rewrite/search/dedupe/rag/score/verify/
-    reflect/report 等节点，并通过条件边支持反思后重新规划 query 再补搜。
+    graph_rag/reflect/report 等节点，并通过条件边支持反思后重新规划 query 再补搜。
     """
 
     def __init__(self, runtime) -> None:
@@ -82,6 +82,7 @@ class LangGraphAgentLoop:
         graph.add_node("search", self._search)
         graph.add_node("dedupe", self._dedupe)
         graph.add_node("rag", self._rag)
+        graph.add_node("graph_rag", self._graph_rag)
         graph.add_node("score", self._score)
         graph.add_node("verify", self._verify)
         graph.add_node("reflect", self._reflect)
@@ -93,7 +94,8 @@ class LangGraphAgentLoop:
         graph.add_edge("query_rewrite", "search")
         graph.add_edge("search", "dedupe")
         graph.add_edge("dedupe", "rag")
-        graph.add_edge("rag", "score")
+        graph.add_edge("rag", "graph_rag")
+        graph.add_edge("graph_rag", "score")
         graph.add_edge("score", "verify")
         graph.add_edge("verify", "reflect")
         graph.add_conditional_edges(
@@ -230,6 +232,26 @@ class LangGraphAgentLoop:
         runtime.persist(task_state, research_state, context, "indexed")
         return state
 
+    def _graph_rag(self, state: GraphState) -> GraphState:
+        """GraphRAG 节点：从 EvidenceChunk 提取实体和共现关系并落盘。"""
+        runtime = self.runtime
+        task_state = state["task_state"]
+        research_state = state["research_state"]
+        context = state["context"]
+        emit = state["emit"]
+        research_state.evidence_relations = runtime.graph_builder.build(research_state.evidence_chunks)
+        runtime.run_store.write_evidence_graph(task_state, research_state.evidence_relations)
+        runtime.emit(
+            task_state,
+            research_state,
+            emit,
+            "evidence_graph_built",
+            "已构建 {} 条证据图谱关系".format(len(research_state.evidence_relations)),
+        )
+        task_state.phase = "graph_indexed"
+        runtime.persist(task_state, research_state, context, "graph_indexed")
+        return state
+
     def _score(self, state: GraphState) -> GraphState:
         """评分节点：对每个来源计算权威性、新鲜度、相关性和风险分数。"""
         runtime = self.runtime
@@ -346,6 +368,7 @@ class LangGraphAgentLoop:
                 "source_scores": research_state.scores,
                 "claims": research_state.claims,
                 "conflicts": research_state.conflicts,
+                "evidence_relations": research_state.evidence_relations,
                 "report_checks": research_state.report_checks,
                 "remaining_gaps": state["gaps"],
                 "tool_audits": research_state.tool_audits,

@@ -9,6 +9,7 @@ import urllib.parse
 from .agents import ConflictDetectorAgent, CitationVerifierAgent, PlannerAgent, ReflectionAgent, ReportAgent, ReportAuditorAgent, SearchQueryPlannerAgent, SourceEvaluatorAgent
 from .checkpoint import create_checkpoint
 from .content_fetcher import build_content_fetcher
+from .graph_rag import EvidenceGraphBuilder
 from .models import ResearchEvent, Source, now_iso
 from .llm_provider import build_llm_provider
 from .rag import EvidenceRetriever
@@ -48,6 +49,7 @@ class DeepResearchRuntime:
         self.tools = tools or ToolRegistry(default_research_connectors(use_live=use_live_tools))
         self.guard = PromptInjectionGuard()
         self.rag = EvidenceRetriever(build_vector_store())
+        self.graph_builder = EvidenceGraphBuilder()
         self.evaluator = SourceEvaluatorAgent(self.llm)
         self.verifier = CitationVerifierAgent(self.llm)
         self.conflict_detector = ConflictDetectorAgent()

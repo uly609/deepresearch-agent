@@ -65,6 +65,18 @@ class EvidenceChunk:
 
 
 @dataclass
+class EvidenceRelation:
+    """证据图谱中的轻量关系，用于 GraphRAG 和研究过程复盘。"""
+
+    source: str
+    relation: str
+    target: str
+    chunk_id: str
+    source_url: str
+    weight: float = 1.0
+
+
+@dataclass
 class Claim:
     """引用校验后的结论，必须绑定来源和证据片段。"""
 
@@ -135,6 +147,7 @@ class ResearchState:
     plan: Optional[ResearchPlan] = None
     sources: List[Source] = field(default_factory=list)
     evidence_chunks: List[EvidenceChunk] = field(default_factory=list)
+    evidence_relations: List[EvidenceRelation] = field(default_factory=list)
     scores: Dict[str, SourceScore] = field(default_factory=dict)
     claims: List[Claim] = field(default_factory=list)
     conflicts: List[Conflict] = field(default_factory=list)

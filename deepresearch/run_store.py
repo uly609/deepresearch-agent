@@ -55,6 +55,10 @@ class RunStore:
         """返回 vector_store.json 的路径。"""
         return self.run_dir(task_state) / "vector_store.json"
 
+    def evidence_graph_path(self, task_state) -> Path:
+        """返回 evidence_graph.json 的路径。"""
+        return self.run_dir(task_state) / "evidence_graph.json"
+
     def start_run(self, task_state) -> Path:
         """创建 run 目录并写入初始 TaskState。"""
         run_dir = self.run_dir(task_state)
@@ -109,6 +113,12 @@ class RunStore:
     def write_vector_store(self, task_state, vector_store):
         """保存 RAG 的本地向量库快照。"""
         return vector_store.save(self.vector_store_path(task_state))
+
+    def write_evidence_graph(self, task_state, relations):
+        """保存 GraphRAG 证据关系图。"""
+        path = self.evidence_graph_path(task_state)
+        self._write_json_atomic(path, self._plain(relations))
+        return path
 
     def read_json(self, path: Path) -> dict:
         """读取 JSON 文件；不存在时返回空 dict。"""

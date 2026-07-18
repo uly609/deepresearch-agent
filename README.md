@@ -8,7 +8,8 @@
   -> Query Rewrite：为每个子问题生成多条检索 query
   -> Search：统一调用 GitHub / arXiv / Web / MCP Connector
   -> Dedupe：规范化 URL，合并重复来源并保留 provenance
-  -> RAG：Source -> EvidenceChunk -> Hybrid Retrieval
+  -> RAG：Source -> EvidenceChunk -> BM25 + Embedding + RRF
+  -> GraphRAG：抽取 Evidence Graph 证据关系
   -> Score：权威性 / 新鲜度 / 相关性 / 风险评分
   -> Verify：claim 与 evidence 校验，标记 supported / weak / unsupported
   -> Reflect：有证据缺口则回到 Query Rewrite 补搜
@@ -21,7 +22,7 @@
 - **多源工具调用**：Search 通过 `ToolRegistry` 统一调度 GitHub、arXiv、Web、MCP 与离线 fallback，主流程不依赖某个搜索供应商。
 - **证据可追溯**：每条来源记录检索 query、Connector 和规范化 URL；每次 run 都落盘 report、trace、task state、checkpoint 和 vector store。
 - **受控运行**：ContextManager 按来源评分选择有限证据并控制 prompt 预算；ToolRegistry 对 Connector 调用做允许名单、输入长度/结果数限制和审计。
-- **引用可信性控制**：来源评分、Prompt Injection 过滤、Hybrid RAG、CitationVerifier 和报告逐句审计共同约束模型生成。
+- **引用可信性控制**：来源评分、Prompt Injection 过滤、BM25/Embedding/RRF 融合检索、Evidence Graph、CitationVerifier 和报告逐句审计共同约束模型生成。
 
 ## 快速体验
 
@@ -178,7 +179,8 @@ deepresearch/
 ├── security.py        # Prompt Injection Guard
 ├── eval_harness.py    # Agent 评估 Harness
 ├── models.py          # 领域数据结构
-├── rag.py             # EvidenceRetriever 与证据检索
+├── rag.py             # EvidenceRetriever，BM25 + Embedding + RRF 检索
+├── graph_rag.py       # Evidence Graph / GraphRAG 轻量关系抽取
 ├── vector_store.py    # 本地向量库
 └── llm_provider.py    # DeepSeek / OpenAI-compatible LLM 接入
 
@@ -201,7 +203,8 @@ docs/                  # 学习文档和面试话术
 - CitationVerifier 结合来源分数、EvidenceChunk 和可选 LLM judge，标记 supported / weak / unsupported，并保存 evidence excerpt 与 verification reason
 - `--llm` 开启后，CitationVerifier 会调用 LLM 对 claim 与 evidence 做严格 supported / weak / unsupported 判断
 - ConflictDetector 检查同一主题下 supported / weak / unsupported 信号是否冲突，并在报告中输出 Conflict Checks
-- 轻量 Hybrid RAG Retriever：把来源切成 evidence chunks，写入本地 `vector_store.json`，用 embedding/cosine similarity + 关键词重合检索支撑 claim
+- 轻量 Hybrid RAG Retriever：把来源切成 evidence chunks，写入本地 `vector_store.json`，用 BM25 词项检索、embedding/cosine similarity 和 RRF 融合排序检索支撑 claim
+- 轻量 GraphRAG：从 EvidenceChunk 抽取关键实体和共现关系，写入 `evidence_graph.json`，用于复盘来源之间的主题关联；后续可替换为 Neo4j / NebulaGraph 等图数据库
 - ReportAuditor 对最终报告逐句做 citation audit；`--llm` 开启后可用 LLM 做 grounded / weak / uncited 审计
 - ReflectionAgent 查找信息缺口，LangGraph 可通过条件边回到 `query_rewrite`，补搜前先重新规划 query
 - ReportAgent 生成带 Evidence、Citation Checks、Remaining Gaps 的 Markdown 报告，并同步写出 `research_report.v1` 结构化 JSON
