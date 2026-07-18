@@ -8,6 +8,7 @@ import urllib.parse
 
 from .agents import ConflictDetectorAgent, CitationVerifierAgent, PlannerAgent, ReflectionAgent, ReportAgent, ReportAuditorAgent, SearchQueryPlannerAgent, SourceEvaluatorAgent
 from .checkpoint import create_checkpoint
+from .content_fetcher import build_content_fetcher
 from .models import ResearchEvent, Source, now_iso
 from .llm_provider import build_llm_provider
 from .rag import EvidenceRetriever
@@ -33,12 +34,14 @@ class DeepResearchRuntime:
         engine: str = "langgraph",
         use_live_tools: bool = False,
         use_llm: bool = False,
+        fetch_content: bool = False,
     ) -> None:
         """根据配置创建一次可执行的 Agent runtime。"""
         self.run_store = run_store or RunStore()
         self.engine = engine
         self.use_live_tools = use_live_tools
         self.use_llm = use_llm
+        self.content_fetcher = build_content_fetcher(fetch_content)
         self.llm = build_llm_provider(use_llm)
         self.planner = PlannerAgent(self.llm)
         self.query_planner = SearchQueryPlannerAgent(self.llm)

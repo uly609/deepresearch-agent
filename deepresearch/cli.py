@@ -42,6 +42,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--live-tools", action="store_true", help="Use live GitHub/arXiv/Web/MCP connectors with offline fallback. One-shot runs enable this by default.")
     parser.add_argument("--offline-tools", action="store_true", help="Use only built-in offline connectors.")
     parser.add_argument("--llm", action="store_true", help="Use an OpenAI-compatible LLM provider when DEEPSEEK_API_KEY or OPENAI_API_KEY is configured.")
+    parser.add_argument("--fetch-content", action="store_true", help="Fetch and clean full web-page text before RAG chunking.")
     parser.add_argument("--resume", default="", help="Resume from a previous run_id checkpoint.")
     return parser
 
@@ -57,7 +58,7 @@ def build_runtime(args) -> DeepResearchRuntime:
     """
     run_store = RunStore(args.run_root)
     use_live_tools = args.live_tools or not args.offline_tools
-    return DeepResearchRuntime(run_store=run_store, engine=args.engine, use_live_tools=use_live_tools, use_llm=args.llm)
+    return DeepResearchRuntime(run_store=run_store, engine=args.engine, use_live_tools=use_live_tools, use_llm=args.llm, fetch_content=args.fetch_content)
 
 
 def run_eval(args) -> None:

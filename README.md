@@ -32,6 +32,16 @@ python3 -m deepresearch --offline-tools "比较 LangGraph、CrewAI、AutoGen 的
 
 开启 `--live-tools` 可检索真实来源；配置 LLM API Key 后使用 `--llm` 启用模型辅助规划、评分、验证和报告生成。未配置 Key 时会回退到规则版，保证流程可复现。
 
+需要在 RAG 前抓取并清洗网页正文时，加上 `--fetch-content`。该开关只处理 Web/official 的 HTTP(S) 来源，正文长度受限后写入 `Source.metadata["content"]`，再进入 EvidenceChunk 切分，避免只依赖搜索摘要。
+
+可选 API 服务：
+
+```bash
+uvicorn deepresearch.api:create_app --factory --reload
+```
+
+`POST /research` 创建研究任务，`GET /research/{task_id}/events` 通过 SSE 推送 plan/search/verify/report 等事件，`GET /research/{task_id}` 获取已完成报告。
+
 早期 Java Demo 已移动到 `_legacy/java_mvp/`，只作为历史参考，不再是主线。
 
 ## 学习入口
@@ -196,6 +206,8 @@ docs/                  # 学习文档和面试话术
 - 可选 LLM Planner / Evaluator / Verifier / Reflection / Reporter / Auditor：有 API key 时增强语义判断，无 key 时保持规则版可复现
 - EvalHarness 评估任务完成、来源数、引用数、弱引用、引用支持率和来源多样性
 - ToolRegistry 为每次 Connector 调用记录成功/失败、结果数、耗时和原因，并写入 `research_state.json` 与 `report.json`
+- `--fetch-content` 可抓取并清洗 Web/official 正文，正文进入 EvidenceChunk 后参与 Hybrid RAG，而不只使用搜索摘要
+- 提供可选 FastAPI + SSE 接口，支持创建研究任务、实时订阅执行事件和查询最终报告
 - 每个关键节点原子刷新 `task_state.json`、`trace.jsonl`、`research_state.json`、`checkpoint.json`；当前 resume 使用原问题 replay，不伪称完整 GraphState 原地续跑
 
 ## 后续路线

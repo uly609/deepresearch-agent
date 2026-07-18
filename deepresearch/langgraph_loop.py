@@ -187,6 +187,7 @@ class LangGraphAgentLoop:
             results = runtime.tools.search_all(search_query)
             research_state.tool_audits.extend(runtime.tools.last_audits)
             results = runtime.guard.filter_sources(results)
+            results = runtime.content_fetcher.enrich(results)
             collected.extend(results)
             context.add_sources(results)
             runtime.emit(task_state, research_state, emit, "search_finished", "已收集 {} 个候选来源".format(len(results)))

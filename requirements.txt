@@ -1,2 +1,4 @@
 langgraph
 sentence-transformers
+fastapi
+uvicorn
