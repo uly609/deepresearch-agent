@@ -42,6 +42,8 @@ uvicorn deepresearch.api:create_app --factory --reload
 
 `POST /research` 创建研究任务，`GET /research/{task_id}/events` 通过 SSE 推送 plan/search/verify/report 等事件，`GET /research/{task_id}` 获取已完成报告。
 
+浏览器访问 `http://127.0.0.1:8000/` 可使用内置研究页面；首次通过 `/auth/register` 注册后获得 API Token。任务、运行状态和最终报告写入 SQLite（默认 `.deepresearch/deepresearch.db`），按 Token 隔离历史任务。
+
 早期 Java Demo 已移动到 `_legacy/java_mvp/`，只作为历史参考，不再是主线。
 
 ## 学习入口
