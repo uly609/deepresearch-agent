@@ -48,6 +48,8 @@ medium  保留但写入 security_findings/security_risk，后续评分降权
 
 ## 未来要怎么增强
 
+当前 ToolRegistry 还做了基础工具治理：Connector 必须注册在 Registry 中；可配置允许名单，限制 query 长度和每个 Connector 的返回数量；每次调用会记录成功/失败、耗时、结果数和异常原因。它解决的是工具调用可观测和资源边界，不等同于完整的生产级权限系统。
+
 后续可以继续加：
 
 - 来源域名白名单/黑名单
@@ -61,4 +63,4 @@ medium  保留但写入 security_findings/security_risk，后续评分降权
 
 可以这样讲：
 
-> DeepResearch 会处理大量外部内容，所以我把外部 source 都视为不可信数据。当前通过 `PromptInjectionGuard` 扫描 title、snippet 和 metadata，对高风险 prompt injection 直接过滤，对中风险来源打标并在评分阶段降权。安全标记不会进入 evidence text，避免污染 RAG 和引用校验。后续还可以加入 ToolPolicy、域名策略和高风险工具人工确认。
+> DeepResearch 会处理大量外部内容，所以我把外部 source 都视为不可信数据。当前通过 `PromptInjectionGuard` 扫描 title、snippet 和 metadata，对高风险 prompt injection 直接过滤，对中风险来源打标并在评分阶段降权；工具层则限制 Connector、query 长度和单次结果数，并记录调用审计。安全标记不会进入 evidence text，避免污染 RAG 和引用校验。下一步再补域名策略和高风险工具人工确认。

@@ -9,13 +9,14 @@ from abc import ABC, abstractmethod
 from html.parser import HTMLParser
 import json
 import os
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
-from typing import Dict, Iterable, List
+from typing import Dict, Iterable, List, Optional, Set
 
-from .models import Source
+from .models import Source, ToolCallAudit
 
 
 class SourceConnector(ABC):
@@ -773,15 +774,58 @@ class ToolRegistry:
     SourceConnector。
     """
 
-    def __init__(self, connectors: List[SourceConnector]) -> None:
-        """注册一组 Connector。"""
+    def __init__(
+        self,
+        connectors: List[SourceConnector],
+        allowed_connectors: Optional[Iterable[str]] = None,
+        max_results_per_connector: int = 8,
+        max_query_chars: int = 500,
+    ) -> None:
+        """注册 Connector，并为外部工具调用设置允许名单和资源上限。"""
         self.connectors = connectors
+        self.allowed_connectors: Optional[Set[str]] = set(allowed_connectors) if allowed_connectors else None
+        self.max_results_per_connector = max(1, int(max_results_per_connector))
+        self.max_query_chars = max(32, int(max_query_chars))
+        self.last_audits: List[ToolCallAudit] = []
 
     def search_all(self, query: str) -> List[Source]:
-        """调用所有 Connector，并按规范化 URL 合并去重结果。"""
+        """调用被允许的 Connector，并记录每次调用的安全审计结果。"""
+        query = str(query or "").strip()
+        if not query:
+            raise ValueError("search query cannot be empty")
+        if len(query) > self.max_query_chars:
+            raise ValueError("search query exceeds {} characters".format(self.max_query_chars))
+
         results: Dict[str, Source] = {}
+        self.last_audits = []
         for connector in self.connectors:
-            for source in connector.search(query):
+            if self.allowed_connectors is not None and connector.name not in self.allowed_connectors:
+                self.last_audits.append(ToolCallAudit(connector.name, query, "blocked", reason="connector is not in allowlist"))
+                continue
+            started = time.monotonic()
+            try:
+                connector_results = connector.search(query)[: self.max_results_per_connector]
+            except Exception as exc:
+                self.last_audits.append(
+                    ToolCallAudit(
+                        connector.name,
+                        query,
+                        "failed",
+                        duration_ms=int((time.monotonic() - started) * 1000),
+                        reason="{}: {}".format(type(exc).__name__, str(exc)[:160]),
+                    )
+                )
+                continue
+            self.last_audits.append(
+                ToolCallAudit(
+                    connector.name,
+                    query,
+                    "success",
+                    result_count=len(connector_results),
+                    duration_ms=int((time.monotonic() - started) * 1000),
+                )
+            )
+            for source in connector_results:
                 if not source.url:
                     continue
                 source = _clone_source(source)

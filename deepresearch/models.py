@@ -97,6 +97,19 @@ class SentenceCheck:
 
 
 @dataclass
+class ToolCallAudit:
+    """一次 Connector 调用的审计记录。"""
+
+    connector: str
+    query: str
+    status: str
+    result_count: int = 0
+    duration_ms: int = 0
+    reason: str = ""
+    created_at: str = field(default_factory=now_iso)
+
+
+@dataclass
 class ResearchEvent:
     """运行过程中的事件，用于终端输出和 trace 落盘。"""
 
@@ -126,5 +139,6 @@ class ResearchState:
     claims: List[Claim] = field(default_factory=list)
     conflicts: List[Conflict] = field(default_factory=list)
     report_checks: List[SentenceCheck] = field(default_factory=list)
+    tool_audits: List[ToolCallAudit] = field(default_factory=list)
     events: List[ResearchEvent] = field(default_factory=list)
     report_markdown: str = ""

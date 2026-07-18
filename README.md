@@ -20,6 +20,7 @@
 - **动态工作流**：LangGraph 条件边控制补搜，而不是固定的一次检索后直接回答。
 - **多源工具调用**：Search 通过 `ToolRegistry` 统一调度 GitHub、arXiv、Web、MCP 与离线 fallback，主流程不依赖某个搜索供应商。
 - **证据可追溯**：每条来源记录检索 query、Connector 和规范化 URL；每次 run 都落盘 report、trace、task state、checkpoint 和 vector store。
+- **受控运行**：ContextManager 按来源评分选择有限证据并控制 prompt 预算；ToolRegistry 对 Connector 调用做允许名单、输入长度/结果数限制和审计。
 - **引用可信性控制**：来源评分、Prompt Injection 过滤、Hybrid RAG、CitationVerifier 和报告逐句审计共同约束模型生成。
 
 ## 快速体验
@@ -182,7 +183,7 @@ docs/                  # 学习文档和面试话术
 - SourceConnector 工具抽象，统一封装 GitHub / arXiv / Web / MCP 和离线 fallback 来源
 - 普通运行默认启用外部检索 Connector，失败时自动回退到离线来源
 - ToolRegistry 统一调度多个 Connector，记录 retrieved_query/retrieved_by/connectors，并按规范化 URL 合并来源
-- ContextManager 管理工作记忆和证据池
+- ContextManager 管理工作记忆和证据池；评分后优先保留高分证据，在 6000 字符预算内把上下文提供给 Reflect 和 Report 的 LLM prompt
 - PromptInjectionGuard 扫描 title/snippet/metadata，按 high/medium 风险过滤或打标
 - SourceEvaluator 按权威性、新鲜度、相关性和风险进行来源评分；相关性采用 LLM/关键词 + RAG 向量相似度的混合判断
 - CitationVerifier 结合来源分数、EvidenceChunk 和可选 LLM judge，标记 supported / weak / unsupported，并保存 evidence excerpt 与 verification reason
@@ -191,17 +192,18 @@ docs/                  # 学习文档和面试话术
 - 轻量 Hybrid RAG Retriever：把来源切成 evidence chunks，写入本地 `vector_store.json`，用 embedding/cosine similarity + 关键词重合检索支撑 claim
 - ReportAuditor 对最终报告逐句做 citation audit；`--llm` 开启后可用 LLM 做 grounded / weak / uncited 审计
 - ReflectionAgent 查找信息缺口，LangGraph 可通过条件边回到 `query_rewrite`，补搜前先重新规划 query
-- ReportAgent 生成带 Evidence、Citation Checks、Remaining Gaps 的 Markdown 报告
+- ReportAgent 生成带 Evidence、Citation Checks、Remaining Gaps 的 Markdown 报告，并同步写出 `research_report.v1` 结构化 JSON
 - 可选 LLM Planner / Evaluator / Verifier / Reflection / Reporter / Auditor：有 API key 时增强语义判断，无 key 时保持规则版可复现
 - EvalHarness 评估任务完成、来源数、引用数、弱引用、引用支持率和来源多样性
-- 每次 run 生成 `task_state.json`、`trace.jsonl`、`research_state.json`、`report.md`、`checkpoint.json`
+- ToolRegistry 为每次 Connector 调用记录成功/失败、结果数、耗时和原因，并写入 `research_state.json` 与 `report.json`
+- 每个关键节点原子刷新 `task_state.json`、`trace.jsonl`、`research_state.json`、`checkpoint.json`；当前 resume 使用原问题 replay，不伪称完整 GraphState 原地续跑
 
 ## 后续路线
 
 1. 增加更稳定的商业 Web Search Provider 或自建搜索代理。
 2. 继续增强 LLM citation grounding，让逐句报告级引用校验由模型辅助判断。
 3. 将本地轻量向量库替换为 FAISS、Chroma、Milvus 或 pgvector。
-4. 做上下文压缩、证据 pinning、完整 GraphState checkpoint resume。
+4. 完整 GraphState checkpoint resume，实现中断节点原地续跑。
 5. 接真实 MCP Client / MCP Gateway；当前已预留 `MCP_SEARCH_ENDPOINT` 搜索入口。
-6. 加 Tool Policy 和更严格的 Prompt Injection 防护。
+6. 增加域名策略和高风险工具人工确认。
 7. 扩展 Eval Harness，统计引用准确率、报告逐句 grounded rate、来源多样性、冲突检测和失败原因。

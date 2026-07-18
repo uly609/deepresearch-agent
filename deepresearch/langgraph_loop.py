@@ -185,6 +185,7 @@ class LangGraphAgentLoop:
             task_state.record_tool("search_all")
             runtime.emit(task_state, research_state, emit, "search_started", "{} -> {}".format(target, search_query))
             results = runtime.tools.search_all(search_query)
+            research_state.tool_audits.extend(runtime.tools.last_audits)
             results = runtime.guard.filter_sources(results)
             collected.extend(results)
             context.add_sources(results)
@@ -237,6 +238,7 @@ class LangGraphAgentLoop:
         context = state["context"]
         emit = state["emit"]
         research_state.scores = runtime.evaluator.score(research_state.sources, question, runtime.rag)
+        context.prioritize_evidence(research_state.scores)
         runtime.emit(task_state, research_state, emit, "sources_scored", "已对来源的权威性、新鲜度、相关性和风险完成评分")
         task_state.phase = "scored"
         runtime.persist(task_state, research_state, context, "scored")
@@ -275,7 +277,12 @@ class LangGraphAgentLoop:
         research_state = state["research_state"]
         context = state["context"]
         emit = state["emit"]
-        gaps = runtime.reflector.find_gaps(question, research_state.claims, research_state.sources)
+        gaps = runtime.reflector.find_gaps(
+            question,
+            research_state.claims,
+            research_state.sources,
+            context_text=context.compact(),
+        )
         if gaps:
             context.add_note("反思发现缺口：" + "；".join(gaps))
             runtime.emit(task_state, research_state, emit, "reflection_finished", "发现 {} 个后续缺口".format(len(gaps)))
@@ -312,6 +319,7 @@ class LangGraphAgentLoop:
             research_state.claims,
             research_state.conflicts,
             state["gaps"],
+            context_text=context.compact(),
         )
         research_state.report_checks = runtime.report_auditor.audit(base_report, research_state.claims)
         research_state.report_markdown = runtime.report_auditor.append_section(base_report, research_state.report_checks)
@@ -326,6 +334,20 @@ class LangGraphAgentLoop:
                 "source_count": len(research_state.sources),
                 "claim_count": len(research_state.claims),
                 "engine": "langgraph",
+                "schema_version": "research_report.v1",
+                "tool_call_count": len(research_state.tool_audits),
+            },
+            structured_report={
+                "schema_version": "research_report.v1",
+                "question": question,
+                "plan": plan,
+                "sources": research_state.sources,
+                "source_scores": research_state.scores,
+                "claims": research_state.claims,
+                "conflicts": research_state.conflicts,
+                "report_checks": research_state.report_checks,
+                "remaining_gaps": state["gaps"],
+                "tool_audits": research_state.tool_audits,
             },
         )
         weak_claim_count = len([claim for claim in research_state.claims if claim.status != "supported"])

@@ -5,9 +5,9 @@
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
-from .models import Claim, Source
+from .models import Claim, Source, SourceScore
 
 
 @dataclass
@@ -23,6 +23,9 @@ class ContextManager:
     evidence_pool: Dict[str, Source] = field(default_factory=dict)
     verified_claims: List[Claim] = field(default_factory=list)
     discarded_notes: List[str] = field(default_factory=list)
+    max_context_chars: int = 6000
+    max_evidence_items: int = 8
+    _source_priorities: Dict[str, float] = field(default_factory=dict)
 
     def add_note(self, note: str) -> None:
         """加入一条工作记忆；超过上限时把最旧 note 移到 discarded_notes。"""
@@ -37,28 +40,59 @@ class ContextManager:
 
     def add_claims(self, claims: List[Claim]) -> None:
         """把验证后的 claim 加入上下文，供后续报告和反思使用。"""
-        self.verified_claims.extend(claims)
+        known = {(claim.text, tuple(claim.source_urls)) for claim in self.verified_claims}
+        for claim in claims:
+            key = (claim.text, tuple(claim.source_urls))
+            if key not in known:
+                self.verified_claims.append(claim)
+                known.add(key)
+
+    def prioritize_evidence(self, scores: Dict[str, SourceScore]) -> None:
+        """同步来源评分，供上下文选择器优先保留高质量证据。"""
+        self._source_priorities = {url: score.final for url, score in scores.items()}
 
     def build(self) -> tuple:
         """生成压缩后的上下文文本和统计信息。"""
-        text = self.compact()
+        text, compact_metadata = self._compact_with_metadata()
         metadata = {
             "working_note_count": len(self.working_notes),
             "evidence_count": len(self.evidence_pool),
             "verified_claim_count": len(self.verified_claims),
             "discarded_note_count": len(self.discarded_notes),
             "context_chars": len(text),
+            **compact_metadata,
         }
         return text, metadata
 
     def compact(self) -> str:
-        """把上下文压缩成可放进 prompt 或 trace 的短文本。"""
-        important_sources = list(self.evidence_pool.values())[:8]
+        """把上下文压缩成受预算控制的短文本。"""
+        return self._compact_with_metadata()[0]
+
+    def _compact_with_metadata(self) -> Tuple[str, Dict[str, int]]:
+        """按证据优先级和字符预算构造上下文，避免来源越多 prompt 越失控。"""
+        important_sources = sorted(
+            self.evidence_pool.values(),
+            key=lambda source: self._source_priorities.get(source.url, 0.0),
+            reverse=True,
+        )[: self.max_evidence_items]
         lines = [
             "Goal: " + self.task_goal,
             "Recent notes:",
             *["- " + note for note in self.working_notes[-8:]],
             "Evidence:",
-            *["- " + source.title + " <" + source.url + ">" for source in important_sources],
         ]
-        return "\n".join(lines)
+        selected_sources = 0
+        for source in important_sources:
+            priority = self._source_priorities.get(source.url, 0.0)
+            excerpt = " ".join(source.snippet.split())[:240]
+            line = "- [{:.2f}] {} | {} <{}>".format(priority, source.title, excerpt, source.url)
+            if len("\n".join(lines + [line])) > self.max_context_chars:
+                break
+            lines.append(line)
+            selected_sources += 1
+        text = "\n".join(lines)[: self.max_context_chars]
+        return text, {
+            "selected_evidence_count": selected_sources,
+            "deferred_evidence_count": max(0, len(self.evidence_pool) - selected_sources),
+            "context_budget_chars": self.max_context_chars,
+        }

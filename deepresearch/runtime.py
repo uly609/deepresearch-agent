@@ -7,6 +7,7 @@ RunStore 和 LangGraph 工作流装配成一个可以执行 `ask()` 的运行时
 import urllib.parse
 
 from .agents import ConflictDetectorAgent, CitationVerifierAgent, PlannerAgent, ReflectionAgent, ReportAgent, ReportAuditorAgent, SearchQueryPlannerAgent, SourceEvaluatorAgent
+from .checkpoint import create_checkpoint
 from .models import ResearchEvent, Source, now_iso
 from .llm_provider import build_llm_provider
 from .rag import EvidenceRetriever
@@ -98,7 +99,7 @@ class DeepResearchRuntime:
         emit(event)
 
     def persist(self, task_state, research_state, context, trigger: str) -> None:
-        """把当前 task、research、context 摘要写入磁盘。"""
+        """把状态、受预算控制的上下文和 checkpoint 原子写入磁盘。"""
         context_text, context_metadata = context.build()
         task_state.note("{}: context_chars={}".format(trigger, context_metadata["context_chars"]))
         self.run_store.write_task_state(task_state)
@@ -112,6 +113,9 @@ class DeepResearchRuntime:
                 "context_preview": context_text[:500],
             },
         )
+        checkpoint = create_checkpoint(task_state, research_state, trigger)
+        self.run_store.write_checkpoint(task_state, checkpoint)
+        self.run_store.write_task_state(task_state)
 
     def dedupe_sources(self, sources):
         """按规范化 URL 去重，并合并重复来源的摘要和 metadata。"""

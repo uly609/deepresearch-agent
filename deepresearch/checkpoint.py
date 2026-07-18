@@ -1,7 +1,7 @@
 """Checkpoint helpers.
 
-这个版本先保存轻量 checkpoint：当前阶段、下一步、来源数和 claim 数。
-后续要做 resume 时，可以基于这份文件继续扩展。
+checkpoint 不只记录最后报告，也在关键节点原子写入当前阶段、下一步和
+研究进度，作为可观测、可复盘的恢复锚点。
 """
 
 from .models import now_iso
@@ -26,6 +26,8 @@ def create_checkpoint(task_state, research_state, trigger: str) -> dict:
         "source_count": len(research_state.sources),
         "claim_count": len(research_state.claims),
         "next_step": infer_next_step(task_state),
+        "resume_mode": "replay_from_original_question",
+        "resume_note": "当前版本会从原问题重新推进工作流，并保留 checkpoint 供对比和排查。",
     }
     task_state.checkpoint_id = checkpoint_id
     return checkpoint

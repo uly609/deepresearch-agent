@@ -85,12 +85,19 @@ class RunStore:
             handle.write("\n")
         return path
 
-    def write_report(self, task_state, markdown: str, metadata: dict):
-        """同时写入 Markdown 报告和 JSON 报告。"""
+    def write_report(self, task_state, markdown: str, metadata: dict, structured_report: dict = None):
+        """同时写入 Markdown 和带固定 schema 的 JSON 研究报告。"""
         md_path = self.report_md_path(task_state)
         json_path = self.report_json_path(task_state)
         md_path.write_text(markdown, encoding="utf-8")
-        self._write_json_atomic(json_path, {"markdown": markdown, "metadata": metadata})
+        self._write_json_atomic(
+            json_path,
+            {
+                "markdown": markdown,
+                "metadata": metadata,
+                "report": self._plain(structured_report or {}),
+            },
+        )
         return md_path
 
     def write_checkpoint(self, task_state, checkpoint: dict):

@@ -393,9 +393,15 @@ class ReflectionAgent:
         """接收可选 LLM；有 LLM 时用模型判断还缺哪些研究证据。"""
         self.llm = llm or LLMProvider()
 
-    def find_gaps(self, question: str, claims: List[Claim], sources: List[Source] = None) -> List[str]:
+    def find_gaps(
+        self,
+        question: str,
+        claims: List[Claim],
+        sources: List[Source] = None,
+        context_text: str = "",
+    ) -> List[str]:
         """根据问题、claim 和来源判断还缺哪些证据。"""
-        llm_gaps = self._llm_find_gaps(question, claims, sources or [])
+        llm_gaps = self._llm_find_gaps(question, claims, sources or [], context_text)
         if llm_gaps is not None:
             return llm_gaps
         joined = " ".join(claim.text.lower() for claim in claims)
@@ -412,7 +418,13 @@ class ReflectionAgent:
             gaps.append("需要更强的来源来支撑弱证据或不支持的结论")
         return gaps
 
-    def _llm_find_gaps(self, question: str, claims: List[Claim], sources: List[Source]) -> Optional[List[str]]:
+    def _llm_find_gaps(
+        self,
+        question: str,
+        claims: List[Claim],
+        sources: List[Source],
+        context_text: str,
+    ) -> Optional[List[str]]:
         """让 LLM 根据已收集证据判断是否需要二次搜索。"""
         if not self.llm.available():
             return None
@@ -422,10 +434,10 @@ class ReflectionAgent:
         )
         source_text = "\n".join("- " + _source_text(source, limit=260) for source in sources[:12])
         user = (
-            "研究问题：\n{}\n\n已有来源：\n{}\n\n已有结论：\n{}\n\n"
+            "研究问题：\n{}\n\n受预算控制的上下文：\n{}\n\n已有来源：\n{}\n\n已有结论：\n{}\n\n"
             "请只返回 JSON：{{\"gaps\": [\"需要继续搜索的具体问题\"]}}。"
             "如果证据已经足够，返回 {{\"gaps\": []}}。缺口要适合直接作为下一轮 search query。"
-        ).format(question, source_text, claim_text)
+        ).format(question, context_text or "none", source_text, claim_text)
         answer = self.llm.complete(
             "你是 DeepResearch 反思节点，负责发现证据缺口并决定是否需要补搜。",
             user,
@@ -458,9 +470,11 @@ class ReportAgent:
         claims: List[Claim],
         conflicts: List[Conflict] = None,
         gaps: List[str] = None,
+        context_text: str = "",
     ) -> str:
         """生成最终 Markdown 报告。"""
-        llm_summary = self._llm_summary(question, sources, claims, gaps or [])
+        llm_summary = self._llm_summary(question, sources, claims, gaps or [], context_text)
+        summary = llm_summary or self._rule_summary(question, sources, scores, claims, gaps or [])
         lines = [
             "# DeepResearch Agent 报告",
             "",
@@ -472,12 +486,7 @@ class ReportAgent:
         for index, sub_question in enumerate(plan.sub_questions, 1):
             lines.append("{}. {}".format(index, sub_question))
         lines.extend(["", "## 核心判断", ""])
-        if llm_summary:
-            lines.append(llm_summary)
-        else:
-            lines.append(
-                "对于以 Agent 为核心的项目，Python 应该作为主实现语言，因为 LangGraph、CrewAI、AutoGen、RAG、评估框架、浏览器/搜索工具和 MCP 客户端的活跃生态更强。Java 可以保留给平台集成，但不应作为主叙事。"
-            )
+        lines.append(summary)
         lines.extend(["", "## 证据", ""])
         for source in sorted(sources, key=lambda item: scores[item.url].final, reverse=True):
             score = scores[source.url]
@@ -514,7 +523,14 @@ class ReportAgent:
         lines.extend(self._next_actions(sources, scores, claims, conflicts or [], gaps or []))
         return "\n".join(lines) + "\n"
 
-    def _llm_summary(self, question: str, sources: List[Source], claims: List[Claim], gaps: List[str]) -> str:
+    def _llm_summary(
+        self,
+        question: str,
+        sources: List[Source],
+        claims: List[Claim],
+        gaps: List[str],
+        context_text: str,
+    ) -> str:
         """让 LLM 基于证据生成一段谨慎的核心判断。"""
         if not self.llm.available():
             return ""
@@ -524,12 +540,36 @@ class ReportAgent:
         )
         claim_text = "\n".join("- {} ({:.2f})".format(claim.text, claim.confidence) for claim in claims[:10])
         user = (
-            "问题：\n{}\n\n证据：\n{}\n\n结论：\n{}\n\n缺口：\n{}\n\n"
+            "问题：\n{}\n\n受预算控制的上下文：\n{}\n\n证据：\n{}\n\n结论：\n{}\n\n缺口：\n{}\n\n"
             "请写一段简洁、基于证据的核心判断，不要编造事实。"
-        ).format(question, evidence, claim_text, "; ".join(gaps) or "none")
+        ).format(question, context_text or "none", evidence, claim_text, "; ".join(gaps) or "none")
         return self.llm.complete(
             "你撰写谨慎的研究报告结论，只能基于给定证据。",
             user,
+        )
+
+    def _rule_summary(
+        self,
+        question: str,
+        sources: List[Source],
+        scores: Dict[str, SourceScore],
+        claims: List[Claim],
+        gaps: List[str],
+    ) -> str:
+        """没有 LLM 时，按已验证证据生成与当前问题对应的保守摘要。"""
+        supported = [claim for claim in claims if claim.status == "supported"][:3]
+        if supported:
+            evidence = "；".join(claim.text for claim in supported)
+            return "围绕“{}”，当前有 {} 条被明确支持的结论：{}。".format(question, len(supported), evidence)
+
+        ranked_sources = sorted(sources, key=lambda source: scores[source.url].final, reverse=True)[:3]
+        source_names = "、".join(source.title for source in ranked_sources)
+        gap_note = "；仍需补充：{}".format("、".join(gaps[:2])) if gaps else ""
+        return "围绕“{}”，当前已收集 {} 个去重来源，并优先参考 {}。现有证据以 weak 或待验证结论为主，报告保留引用与验证状态，避免把不充分证据写成确定性结论{}。".format(
+            question,
+            len(sources),
+            source_names or "可用来源",
+            gap_note,
         )
 
     def _next_actions(

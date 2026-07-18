@@ -5,6 +5,7 @@ __pycache__/
 
 .deepresearch/
 .deepresearch_py/
+.venv/
 
 .env
 .env.*
