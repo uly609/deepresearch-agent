@@ -10,6 +10,7 @@ from .agents import ConflictDetectorAgent, CitationVerifierAgent, PlannerAgent, 
 from .checkpoint import create_checkpoint
 from .content_fetcher import build_content_fetcher
 from .graph_rag import EvidenceGraphBuilder
+from .harness import AgentHarness, RunPolicy
 from .models import ResearchEvent, Source, now_iso
 from .llm_provider import build_llm_provider
 from .rag import EvidenceRetriever
@@ -36,6 +37,7 @@ class DeepResearchRuntime:
         use_live_tools: bool = False,
         use_llm: bool = False,
         fetch_content: bool = False,
+        run_policy: Optional[RunPolicy] = None,
     ) -> None:
         """根据配置创建一次可执行的 Agent runtime。"""
         self.run_store = run_store or RunStore()
@@ -47,6 +49,7 @@ class DeepResearchRuntime:
         self.planner = PlannerAgent(self.llm)
         self.query_planner = SearchQueryPlannerAgent(self.llm)
         self.tools = tools or ToolRegistry(default_research_connectors(use_live=use_live_tools))
+        self.harness = AgentHarness(run_policy)
         self.guard = PromptInjectionGuard()
         self.rag = EvidenceRetriever(build_vector_store())
         self.graph_builder = EvidenceGraphBuilder()

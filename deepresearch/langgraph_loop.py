@@ -76,17 +76,17 @@ class LangGraphAgentLoop:
             ) from exc
 
         graph = StateGraph(GraphState)
-        graph.add_node("start", self._start)
-        graph.add_node("plan", self._plan)
-        graph.add_node("query_rewrite", self._query_rewrite)
-        graph.add_node("search", self._search)
-        graph.add_node("dedupe", self._dedupe)
-        graph.add_node("rag", self._rag)
-        graph.add_node("graph_rag", self._graph_rag)
-        graph.add_node("score", self._score)
-        graph.add_node("verify", self._verify)
-        graph.add_node("reflect", self._reflect)
-        graph.add_node("report", self._report)
+        graph.add_node("start", self._with_harness("start", self._start))
+        graph.add_node("plan", self._with_harness("plan", self._plan))
+        graph.add_node("query_rewrite", self._with_harness("query_rewrite", self._query_rewrite))
+        graph.add_node("search", self._with_harness("search", self._search))
+        graph.add_node("dedupe", self._with_harness("dedupe", self._dedupe))
+        graph.add_node("rag", self._with_harness("rag", self._rag))
+        graph.add_node("graph_rag", self._with_harness("graph_rag", self._graph_rag))
+        graph.add_node("score", self._with_harness("score", self._score))
+        graph.add_node("verify", self._with_harness("verify", self._verify))
+        graph.add_node("reflect", self._with_harness("reflect", self._reflect))
+        graph.add_node("report", self._with_harness("report", self._report))
 
         graph.add_edge(START, "start")
         graph.add_edge("start", "plan")
@@ -108,6 +108,27 @@ class LangGraphAgentLoop:
         )
         graph.add_edge("report", END)
         return graph.compile()
+
+    def _with_harness(self, node_name: str, handler):
+        """用 AgentHarness 包装节点，统一记录节点耗时、状态和失败原因。"""
+        def wrapped(state: GraphState) -> GraphState:
+            runtime = self.runtime
+            task_state = state["task_state"]
+            research_state = state["research_state"]
+            token = runtime.harness.start_node(node_name)
+            try:
+                result = handler(state)
+            except Exception as exc:
+                runtime.harness.finish_node(token, task_state, research_state, "failed", str(exc)[:200])
+                runtime.run_store.write_research_state(task_state, research_state)
+                runtime.run_store.write_task_state(task_state.fail("{} failed: {}".format(node_name, exc)))
+                raise
+            runtime.harness.finish_node(token, task_state, research_state)
+            runtime.run_store.write_research_state(task_state, research_state)
+            runtime.run_store.write_task_state(task_state)
+            return result
+
+        return wrapped
 
     def _start(self, state: GraphState) -> GraphState:
         """开始节点：发出 run_started 事件。"""
@@ -156,6 +177,7 @@ class LangGraphAgentLoop:
                     pending_queries.append({"target": target, "query": query})
                     known_queries.add(query)
 
+        pending_queries = runtime.harness.limit_queries(pending_queries, task_state)
         state["pending_queries"] = pending_queries
         task_state.phase = "queries_planned"
         runtime.emit(
@@ -194,7 +216,7 @@ class LangGraphAgentLoop:
             context.add_sources(results)
             runtime.emit(task_state, research_state, emit, "search_finished", "已收集 {} 个候选来源".format(len(results)))
             runtime.persist(task_state, research_state, context, "search_step")
-        state["collected"] = collected
+        state["collected"] = runtime.harness.limit_sources(collected, task_state)
         state["searched_queries"] = searched_queries
         state["pending_queries"] = []
         return state
@@ -318,7 +340,7 @@ class LangGraphAgentLoop:
 
     def _route_after_reflect(self, state: GraphState) -> str:
         """条件路由：有缺口且未超过轮次时重新规划 query，否则进入报告。"""
-        if state["gaps"] and state["search_round"] < 2:
+        if self.runtime.harness.should_rewrite_after_reflect(state["gaps"], state["search_round"]):
             return "query_rewrite"
         return "report"
 
@@ -372,6 +394,7 @@ class LangGraphAgentLoop:
                 "report_checks": research_state.report_checks,
                 "remaining_gaps": state["gaps"],
                 "tool_audits": research_state.tool_audits,
+                "harness_steps": research_state.harness_steps,
             },
         )
         weak_claim_count = len([claim for claim in research_state.claims if claim.status != "supported"])

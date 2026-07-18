@@ -1,9 +1,10 @@
 # DeepResearch Agent
 
-面向技术调研场景的 Python-first DeepResearch Agent。它不直接根据模型记忆输出答案，而是把研究问题拆成子任务，检索外部资料，构建证据链并验证引用，最终生成可追溯的 Markdown 研究报告。
+面向技术调研场景的 Python-first DeepResearch Agent Harness。它不直接根据模型记忆输出答案，而是用受控 Agent Runtime 编排研究任务：拆解子问题、调用外部工具、治理上下文和执行预算、构建证据链、验证引用，并把全过程落盘成可复盘的运行工件。
 
 ```text
 用户问题
+  -> Harness：加载 RunPolicy，记录节点 telemetry，控制工具步数和搜索轮次
   -> Plan：拆解研究子问题
   -> Query Rewrite：为每个子问题生成多条检索 query
   -> Search：统一调用 GitHub / arXiv / Web / MCP Connector
@@ -19,6 +20,7 @@
 ## 为什么不是普通 RAG 问答
 
 - **动态工作流**：LangGraph 条件边控制补搜，而不是固定的一次检索后直接回答。
+- **Agent Harness**：`AgentHarness` 包装每个 LangGraph 节点，记录节点耗时、状态和失败原因，并通过 `RunPolicy` 控制 query fan-out、工具步数、来源数量和补搜轮次。
 - **多源工具调用**：Search 通过 `ToolRegistry` 统一调度 GitHub、arXiv、Web、MCP 与离线 fallback，主流程不依赖某个搜索供应商。
 - **证据可追溯**：每条来源记录检索 query、Connector 和规范化 URL；每次 run 都落盘 report、trace、task state、checkpoint 和 vector store。
 - **受控运行**：ContextManager 按来源评分选择有限证据并控制 prompt 预算；ToolRegistry 对 Connector 调用做允许名单、输入长度/结果数限制和审计。
@@ -174,6 +176,7 @@ deepresearch/
 ├── run_store.py       # task_state / trace / report / checkpoint 落盘
 ├── checkpoint.py      # checkpoint 生成与下一步推断
 ├── context_manager.py # 上下文管理、工作记忆、证据池
+├── harness.py         # Agent Harness：运行策略、节点 telemetry、预算控制
 ├── tools.py           # SourceConnector 与 ToolRegistry
 ├── agents.py          # Planner / Evaluator / Verifier / Reflection / Reporter
 ├── security.py        # Prompt Injection Guard
@@ -191,7 +194,9 @@ docs/                  # 学习文档和面试话术
 
 ## 当前能力
 
-- Python Agent Core，结构参考 Pico 的 runtime / loop / store / state 分层
+- Python Agent Harness Core，结构参考 Pico 的 runtime / loop / store / state 分层
+- AgentHarness 为每个 LangGraph 节点记录 `HarnessStep`，包括节点名、状态、耗时、phase 和失败原因，并写入 `research_state.json` / `report.json`
+- RunPolicy 控制每轮 query 数量、最大工具步数、最大来源数和最大补搜轮次，避免 Agent 长任务无限扩张
 - 自动拆解研究问题
 - LangGraph 将 `query_rewrite` 作为独立节点；SearchQueryPlanner 对每个子问题或反思缺口做 query fan-out，覆盖官方文档、GitHub/论文和趋势检索
 - SourceConnector 工具抽象，统一封装 GitHub / arXiv / Web / MCP 和离线 fallback 来源
@@ -209,11 +214,11 @@ docs/                  # 学习文档和面试话术
 - ReflectionAgent 查找信息缺口，LangGraph 可通过条件边回到 `query_rewrite`，补搜前先重新规划 query
 - ReportAgent 生成带 Evidence、Citation Checks、Remaining Gaps 的 Markdown 报告，并同步写出 `research_report.v1` 结构化 JSON
 - 可选 LLM Planner / Evaluator / Verifier / Reflection / Reporter / Auditor：有 API key 时增强语义判断，无 key 时保持规则版可复现
-- EvalHarness 评估任务完成、来源数、引用数、弱引用、引用支持率和来源多样性
+- EvalHarness 评估任务完成、来源数、引用数、弱引用、引用支持率和来源多样性；AgentHarness 记录线上单次 run 的节点级执行观测
 - ToolRegistry 为每次 Connector 调用记录成功/失败、结果数、耗时和原因，并写入 `research_state.json` 与 `report.json`
 - `--fetch-content` 可抓取并清洗 Web/official 正文，正文进入 EvidenceChunk 后参与 Hybrid RAG，而不只使用搜索摘要
 - 提供可选 FastAPI + SSE 接口，支持创建研究任务、实时订阅执行事件和查询最终报告
-- 每个关键节点原子刷新 `task_state.json`、`trace.jsonl`、`research_state.json`、`checkpoint.json`；当前 resume 使用原问题 replay，不伪称完整 GraphState 原地续跑
+- 每个关键节点原子刷新 `task_state.json`、`trace.jsonl`、`research_state.json`、`checkpoint.json`；Harness telemetry、tool audit、vector store、evidence graph 和结构化 report 一起落盘；当前 resume 使用原问题 replay，不伪称完整 GraphState 原地续跑
 
 ## 后续路线
 

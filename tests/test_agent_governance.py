@@ -6,8 +6,10 @@ import unittest
 from deepresearch.context_manager import ContextManager
 from deepresearch.agents import ReportAgent
 from deepresearch.graph_rag import EvidenceGraphBuilder
+from deepresearch.harness import AgentHarness, RunPolicy
 from deepresearch.models import Claim, Source, SourceScore
 from deepresearch.rag import EvidenceRetriever
+from deepresearch.runtime import DeepResearchRuntime
 from deepresearch.run_store import RunStore
 from deepresearch.task_state import TaskState
 from deepresearch.tools import SourceConnector, ToolRegistry
@@ -109,6 +111,26 @@ class AgentGovernanceTests(unittest.TestCase):
         ])
         relations = EvidenceGraphBuilder().build(chunks)
         self.assertTrue(any(relation.relation == "MENTIONS" for relation in relations))
+
+    def test_harness_limits_query_fanout_by_policy(self):
+        task = TaskState.create("research")
+        task.tool_steps = 1
+        harness = AgentHarness(RunPolicy(max_tool_steps=3, max_queries_per_round=5))
+        queries = [{"query": str(index)} for index in range(10)]
+        limited = harness.limit_queries(queries, task)
+        self.assertEqual(len(limited), 2)
+        self.assertTrue(any("trimmed_queries=8" in note for note in task.notes))
+
+    def test_runtime_records_harness_steps(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = DeepResearchRuntime(
+                RunStore(directory),
+                use_live_tools=False,
+                run_policy=RunPolicy(max_queries_per_round=2, max_tool_steps=3),
+            )
+            state = runtime.ask("compare LangGraph and AutoGen")
+            self.assertTrue(state.harness_steps)
+            self.assertTrue(any(step.node == "query_rewrite" for step in state.harness_steps))
 
 
 if __name__ == "__main__":

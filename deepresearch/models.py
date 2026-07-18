@@ -132,6 +132,18 @@ class ResearchEvent:
 
 
 @dataclass
+class HarnessStep:
+    """Agent Harness 记录的一次节点执行。"""
+
+    node: str
+    status: str
+    duration_ms: int
+    phase: str
+    reason: str = ""
+    created_at: str = field(default_factory=now_iso)
+
+
+@dataclass
 class ResearchState:
     """一次研究任务的完整领域状态。
 
@@ -153,5 +165,6 @@ class ResearchState:
     conflicts: List[Conflict] = field(default_factory=list)
     report_checks: List[SentenceCheck] = field(default_factory=list)
     tool_audits: List[ToolCallAudit] = field(default_factory=list)
+    harness_steps: List[HarnessStep] = field(default_factory=list)
     events: List[ResearchEvent] = field(default_factory=list)
     report_markdown: str = ""
